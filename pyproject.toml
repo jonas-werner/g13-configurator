@@ -1,0 +1,23 @@
+[project]
+name = "g13-linux"
+version = "0.1.0"
+description = "Userspace Linux driver and configuration app for the Logitech G13 gameboard"
+requires-python = ">=3.11"
+dependencies = [
+    "pyusb>=1.2.1",
+    "evdev>=1.6.1",
+    "PySide6>=6.6",
+    "Pillow>=9.4",
+    "tomli-w>=1.0",
+]
+
+[project.scripts]
+g13d = "g13.daemon.service:run"
+g13-gui = "g13.gui.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["g13"]

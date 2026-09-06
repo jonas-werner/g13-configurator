@@ -1,0 +1,11 @@
+[Unit]
+Description=G13 gameboard driver daemon
+After=graphical-session.target
+
+[Service]
+ExecStart={{VENV_BIN}}/g13d
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

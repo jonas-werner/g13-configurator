@@ -1,0 +1,5 @@
+# Logitech G13 Advanced Gameboard (046d:c21c)
+# Grants plugdev group + the logind "uaccess" ACL read/write access to the
+# raw USB device node, so g13d can open it, detach hid-generic, and claim
+# the interface without running as root.
+SUBSYSTEM=="usb", ATTR{idVendor}=="046d", ATTR{idProduct}=="c21c", MODE="0660", GROUP="plugdev", TAG+="uaccess"
