@@ -123,10 +123,17 @@ def friendly_control(name: str) -> str:
 class KeyCaptureButton(QPushButton):
     captured = Signal(list)
 
+
     def __init__(self) -> None:
         super().__init__("Capture key")
         self._capturing = False
         self.clicked.connect(self._begin)
+
+    def focusNextPrevChild(self, next_child: bool) -> bool:
+        if self._capturing:
+            # Prevent the Tab key from shifting focus while recording
+            return False 
+        return super().focusNextPrevChild(next_child)
 
     def _begin(self) -> None:
         self._capturing = True
@@ -156,6 +163,12 @@ class MacroRecorder(QPushButton):
         self._events: list[dict] = []
         self._last_time: float | None = None
         self.clicked.connect(self._toggle)
+
+    def focusNextPrevChild(self, next_child: bool) -> bool:
+        if self.isChecked():
+            # Prevent Tab/Shift+Tab from shifting focus while recording a macro
+            return False 
+        return super().focusNextPrevChild(next_child)
 
     def set_events(self, events: list[dict]) -> None:
         self._events = copy.deepcopy(events)

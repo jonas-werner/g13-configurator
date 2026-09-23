@@ -12,7 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from PIL import Image
 
-from g13.gui.binding_editor import ProfileInspector, shortcut_events
+from g13.gui.binding_editor import KeyCaptureButton, MacroRecorder, ProfileInspector, shortcut_events
 from g13.gui.device_layout import ASSET_PATH, G_KEYS, IMAGE_H, IMAGE_W
 from g13.gui.keyboard_view import G13View
 
@@ -203,6 +203,33 @@ class GuiTests(unittest.TestCase):
         inspector.update_slot(None)
         self.assertIsNone(inspector._profile["slot"])
         self.assertIsNone(inspector._draft["slot"])
+
+    def test_macro_widgets_trap_tab_focus(self) -> None:
+        from PySide6.QtWidgets import QWidget, QVBoxLayout
+        
+        # Create a dummy window with siblings so focus *can* theoretically shift
+        parent = QWidget()
+        layout = QVBoxLayout(parent)
+        capture_btn = KeyCaptureButton()
+        macro_btn = MacroRecorder()
+        layout.addWidget(capture_btn)
+        layout.addWidget(macro_btn)
+        
+        # 1. Test KeyCaptureButton
+        # By default, it should allow focus to pass to the next widget (returns True)
+        self.assertTrue(capture_btn.focusNextPrevChild(True))
+        
+        # When capturing, it must trap the focus (returns False)
+        capture_btn._begin()
+        self.assertFalse(capture_btn.focusNextPrevChild(True))
+        
+        # 2. Test MacroRecorder
+        # By default, it should allow focus to pass
+        self.assertTrue(macro_btn.focusNextPrevChild(True))
+        
+        # When checked (recording), it must trap the focus
+        macro_btn.setChecked(True)
+        self.assertFalse(macro_btn.focusNextPrevChild(True))
 
 
 if __name__ == "__main__":
