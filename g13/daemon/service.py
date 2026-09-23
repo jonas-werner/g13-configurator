@@ -437,14 +437,16 @@ class G13Daemon:
                 (slot + 1 for name, slot in PROFILE_SWITCH_KEYS.items() if name in pressed),
                 None,
             )
-            switch_to = next(
-                (
-                    index
-                    for index, profile in enumerate(self.profiles)
-                    if profile.slot == switch_slot and index != self.active_index
-                ),
-                None,
-            )
+            switch_to = None
+            if switch_slot is not None:
+                switch_to = next(
+                    (
+                        index
+                        for index, profile in enumerate(self.profiles)
+                        if profile.slot == switch_slot and index != self.active_index
+                    ),
+                    None,
+                )
             if switch_to is not None:
                 await self._cancel_macros()
                 await self._release_all_held()

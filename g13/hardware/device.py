@@ -68,7 +68,7 @@ class G13Device:
             raise RuntimeError("device not open")
         try:
             data = self._dev.read(ENDPOINT_IN, REPORT_SIZE, timeout=timeout_ms)
-        except usb.core.USBTimeoutError:
+        except usb.core.USBError:
             return None
         return bytes(data)
 

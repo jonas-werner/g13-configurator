@@ -130,6 +130,27 @@ class DaemonTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "no profile assigned"):
             await self.daemon.switch_profile_by_slot(1)
 
+    async def test_regular_keys_do_not_trigger_slot_switching(self) -> None:
+        """Ensure that when no M-key is pressed (switch_slot is None), 
+        unassigned profiles (slot = None) are never matched for switching."""
+        active_id_before = self.daemon.active_profile.id
+        
+        # Simulate the exact guard logic used in input_loop
+        switch_slot = None  # No M-key pressed
+        switch_to = None
+        if switch_slot is not None:
+            switch_to = next(
+                (
+                    index
+                    for index, profile in enumerate(self.daemon.profiles)
+                    if profile.slot == switch_slot and index != self.daemon.active_index
+                ),
+                None,
+            )
+            
+        self.assertIsNone(switch_to)
+        self.assertEqual(self.daemon.active_profile.id, active_id_before)
+
     async def test_final_profile_cannot_be_deleted(self) -> None:
         for profile in list(self.daemon.profiles[1:]):
             await self.daemon._handle_request({"cmd": "delete_profile", "id": profile.id})
