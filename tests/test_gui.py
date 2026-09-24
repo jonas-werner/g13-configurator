@@ -13,6 +13,7 @@ from PySide6.QtGui import QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton, QVBoxLayout, QWidget
 from PIL import Image
+from evdev import ecodes
 
 from g13.gui.binding_editor import (
     KeyCaptureButton, MacroRecorder, ProfileInspector, event_key_name,
@@ -293,6 +294,70 @@ class GuiTests(unittest.TestCase):
         event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_1,
                           Qt.KeyboardModifier.KeypadModifier)
         self.assertEqual(event_key_name(event), "KEY_KP1")
+
+    def test_german_physical_keys_capture_on_x11_and_wayland(self) -> None:
+        cases = (
+            (Qt.Key.Key_ssharp, ecodes.KEY_MINUS),
+            (Qt.Key.Key_Dead_Acute, ecodes.KEY_EQUAL),
+            (Qt.Key.Key_Adiaeresis, ecodes.KEY_APOSTROPHE),
+            (Qt.Key.Key_Odiaeresis, ecodes.KEY_SEMICOLON),
+            (Qt.Key.Key_Udiaeresis, ecodes.KEY_LEFTBRACE),
+            (Qt.Key.Key_Plus, ecodes.KEY_RIGHTBRACE),
+            (Qt.Key.Key_NumberSign, ecodes.KEY_BACKSLASH),
+            (Qt.Key.Key_Less, ecodes.KEY_102ND),
+            (Qt.Key.Key_Z, ecodes.KEY_Y),
+            (Qt.Key.Key_Y, ecodes.KEY_Z),
+        )
+        for platform in ("xcb", "wayland", "wayland-egl"):
+            with patch.object(QApplication, "platformName", return_value=platform):
+                for key, code in cases:
+                    with self.subTest(platform=platform, key=key):
+                        capture = KeyCaptureButton()
+                        captured = []
+                        capture.captured.connect(captured.append)
+                        capture.click()
+                        for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                            event = QKeyEvent(kind, key, Qt.KeyboardModifier.NoModifier,
+                                              code + 8, 0, 0)
+                            self.app.sendEvent(capture, event)
+                        self.assertEqual(captured, [[ecodes.KEY[code]]])
+                        self.assertFalse(capture.recording())
+
+    def test_wayland_german_chord_and_macro_keep_physical_codes(self) -> None:
+        keys = ((Qt.Key.Key_Control, ecodes.KEY_RIGHTCTRL),
+                (Qt.Key.Key_Alt, ecodes.KEY_LEFTALT),
+                (Qt.Key.Key_ssharp, ecodes.KEY_MINUS))
+        with patch.object(QApplication, "platformName", return_value="wayland"):
+            for recorder in (KeyCaptureButton(), MacroRecorder()):
+                with self.subTest(recorder=type(recorder).__name__):
+                    captured = []
+                    if isinstance(recorder, KeyCaptureButton):
+                        recorder.captured.connect(captured.append)
+                    recorder.click()
+                    for kind, sequence in ((QEvent.Type.KeyPress, keys),
+                                           (QEvent.Type.KeyRelease, reversed(keys))):
+                        for key, code in sequence:
+                            self.app.sendEvent(recorder, QKeyEvent(
+                                kind, key, Qt.KeyboardModifier.NoModifier, code + 8, 0, 0,
+                            ))
+                    expected = ["KEY_RIGHTCTRL", "KEY_LEFTALT", "KEY_MINUS"]
+                    if isinstance(recorder, KeyCaptureButton):
+                        self.assertEqual(captured, [expected])
+                    else:
+                        recorder.click()
+                        self.assertEqual(
+                            [(e["code"], e["down"]) for e in recorder.events()],
+                            [(k, True) for k in expected] + [(k, False) for k in reversed(expected)],
+                        )
+
+    def test_native_scan_fallback_is_limited_to_known_backends(self) -> None:
+        for platform, scan in (("offscreen", ecodes.KEY_Y + 8), ("wayland", 0),
+                               ("wayland", 999999)):
+            with self.subTest(platform=platform, scan=scan), \
+                 patch.object(QApplication, "platformName", return_value=platform):
+                event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Z,
+                                  Qt.KeyboardModifier.NoModifier, scan, 0, 0)
+                self.assertEqual(event_key_name(event), "KEY_Z")
 
     def test_recording_consumes_shortcuts_special_keys_and_repeat(self) -> None:
         window = QWidget()

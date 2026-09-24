@@ -84,9 +84,12 @@ _MODIFIER_KEYS = {
 
 def event_key_name(event: QKeyEvent) -> str | None:
     """Translate common Qt keyboard keys to Linux evdev names."""
-    # X11/XKB keycodes use the Linux evdev code plus eight. Prefer the
-    # physical key so right modifiers, keypad and non-US layouts survive.
-    if QApplication.platformName() == "xcb" and event.nativeScanCode() >= 8:
+    # Qt's X11 and Wayland/XKB backends both expose evdev codes plus eight.
+    # Preserve physical keys rather than guessing their position from a
+    # layout-dependent symbol (e.g. German ß, umlauts, or a dead accent).
+    # Other backends need their own native-code convention; keep the fallback.
+    platform = QApplication.platformName()
+    if platform in {"xcb", "wayland", "wayland-egl"} and event.nativeScanCode() >= 8:
         try:
             return keycode_to_str(event.nativeScanCode() - 8)
         except ProfileError:

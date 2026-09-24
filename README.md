@@ -150,8 +150,13 @@ button, and shortcut handling (including Tab, Enter, Space, and Escape).
 Auto-repeat is ignored; macros preserve the held-key duration instead.
 Changing the selected control or hiding/deactivating the recorder cancels
 unfinished capture. Desktop-reserved shortcuts may be intercepted by the
-window manager before the app receives them. X11 capture preserves physical
-evdev keys, including right modifiers; other platforms use Qt key mappings.
+window manager before the app receives them. X11 and Wayland capture preserve
+physical evdev keys, including right modifiers and German-layout keys such as
+ß, ä, ö, ü, +, #, and the accent key. Other platforms use Qt key mappings.
+The G13 emits the same physical key code; the desktop/game keyboard layout
+determines its meaning. Labels currently use evdev's US-style names (for
+example, German ß is displayed as Minus). This does not change the captured
+key or require changing the in-game binding.
 
 The assignable joystick controls are:
 
