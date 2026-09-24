@@ -94,6 +94,9 @@ only when you run the command above.
 
 ## Using profiles
 
+Fresh installs start with the custom Cyberpunk 2077 layout on M1 at 60%
+brightness, plus two empty profiles on M2/M3. Existing profiles are preserved.
+
 The profile list is on the left. M1-, M2-, and M3-assigned profiles stay at the
 top, followed by any unassigned profiles.
 
@@ -129,6 +132,21 @@ assignment type:
 - **Macro sequence** — timed key presses and releases.
 - **Mouse button** — left, right, middle, back, or forward click.
 
+After clicking **Capture key**, press and release the key or chord. Ctrl, Alt,
+Shift, and Super can be assigned alone; combinations automatically become
+shortcuts, even when starting from Single keystroke. Capture completes when
+all pressed keys are released. Use **Macro sequence** for multiple successive
+keystrokes, then click the recorder again to stop. Keys still held at Stop
+receive matching release events.
+
+While recording, keyboard events are consumed before Qt's normal focus,
+button, and shortcut handling (including Tab, Enter, Space, and Escape).
+Auto-repeat is ignored; macros preserve the held-key duration instead.
+Changing the selected control or hiding/deactivating the recorder cancels
+unfinished capture. Desktop-reserved shortcuts may be intercepted by the
+window manager before the app receives them. X11 capture preserves physical
+evdev keys, including right modifiers; other platforms use Qt key mappings.
+
 The assignable joystick controls are:
 
 - Up, down, left, and right
@@ -141,8 +159,14 @@ pointer instead of emitting the configured direction keys.
 ## Starter templates
 
 The **Starter template** menu provides initial mappings for several games.
-Applying one replaces the draft name, color, key bindings, and macros. Review
-the result and press **Save** when satisfied.
+Applying one replaces the draft name, color, all key and thumb bindings, and
+macros, and selects directional-stick mode. Brightness, LCD media, and the
+M-key assignment are retained. Review the result and press **Save** when satisfied.
+
+See the [game layout guide](docs/game-layouts.md) for each mapping and its
+rationale. The portable [Cyberpunk profile](assets/profiles/cyberpunk-2077.toml)
+also includes the bundled splash; keep its relative artwork path valid when
+copying it to another directory.
 
 Templates are starting points rather than official control schemes. In-game
 bindings may differ from their defaults.

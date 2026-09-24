@@ -41,6 +41,8 @@ import tomli_w
 from evdev import ecodes
 from PIL import Image
 
+from g13.presets import PRESETS_BY_NAME
+
 PROFILES_DIR = Path.home() / ".config" / "g13-linux" / "profiles"
 PROFILE_SLOTS = (1, 2, 3)
 G_KEY_IDS = frozenset(f"G{i}" for i in range(1, 23))
@@ -431,6 +433,7 @@ def _write_profile(
     name: str,
     bindings: dict[str, str],
     color: tuple[int, int, int],
+    backlight_intensity: int = 100,
 ) -> None:
     _atomic_write(
         path,
@@ -439,7 +442,7 @@ def _write_profile(
             "name": name,
             "bindings": bindings,
             "color": list(color),
-            "backlight_intensity": 100,
+            "backlight_intensity": backlight_intensity,
             "stick_mode": "keys",
         },
     )
@@ -452,12 +455,14 @@ def ensure_default_profiles(directory: Path = PROFILES_DIR) -> None:
     if not paths:
         default_colors = {1: (0, 255, 0), 2: (0, 120, 255), 3: (190, 70, 255)}
         for slot in PROFILE_SLOTS:
+            preset = PRESETS_BY_NAME["Cyberpunk 2077"] if slot == 1 else None
             _write_profile(
                 directory / f"profile-{slot}.toml",
                 slot,
-                f"Profile {slot}",
-                DEFAULT_JOYSTICK_BINDINGS,
-                default_colors[slot],
+                preset.name if preset else f"Profile {slot}",
+                preset.bindings if preset else DEFAULT_JOYSTICK_BINDINGS,
+                preset.color if preset else default_colors[slot],
+                backlight_intensity=60 if preset else 100,
             )
         return
 

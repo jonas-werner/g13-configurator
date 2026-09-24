@@ -7,9 +7,10 @@ import time
 from pathlib import Path
 
 from PIL import Image as PillowImage
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QMovie, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QColorDialog,
     QComboBox,
     QFileDialog,
@@ -26,14 +27,30 @@ from PySide6.QtWidgets import (
 
 from g13.gui import theme
 from g13.presets import GAME_PRESETS, PRESETS_BY_NAME
+from g13.profile import keycode_to_str, ProfileError
 
 
 _SPECIAL_KEYS = {
+    Qt.Key.Key_CapsLock: "KEY_CAPSLOCK",
+    Qt.Key.Key_NumLock: "KEY_NUMLOCK",
+    Qt.Key.Key_ScrollLock: "KEY_SCROLLLOCK",
+    Qt.Key.Key_Print: "KEY_SYSRQ",
+    Qt.Key.Key_Pause: "KEY_PAUSE",
+    Qt.Key.Key_Menu: "KEY_COMPOSE",
+    Qt.Key.Key_AltGr: "KEY_RIGHTALT",
+    Qt.Key.Key_VolumeUp: "KEY_VOLUMEUP",
+    Qt.Key.Key_VolumeDown: "KEY_VOLUMEDOWN",
+    Qt.Key.Key_VolumeMute: "KEY_MUTE",
+    Qt.Key.Key_MediaPlay: "KEY_PLAYPAUSE",
+    Qt.Key.Key_MediaStop: "KEY_STOPCD",
+    Qt.Key.Key_MediaNext: "KEY_NEXTSONG",
+    Qt.Key.Key_MediaPrevious: "KEY_PREVIOUSSONG",
     Qt.Key.Key_Space: "KEY_SPACE",
     Qt.Key.Key_Return: "KEY_ENTER",
     Qt.Key.Key_Enter: "KEY_ENTER",
     Qt.Key.Key_Escape: "KEY_ESC",
     Qt.Key.Key_Tab: "KEY_TAB",
+    Qt.Key.Key_Backtab: "KEY_TAB",
     Qt.Key.Key_Backspace: "KEY_BACKSPACE",
     Qt.Key.Key_Delete: "KEY_DELETE",
     Qt.Key.Key_Insert: "KEY_INSERT",
@@ -67,7 +84,29 @@ _MODIFIER_KEYS = {
 
 def event_key_name(event: QKeyEvent) -> str | None:
     """Translate common Qt keyboard keys to Linux evdev names."""
+    # X11/XKB keycodes use the Linux evdev code plus eight. Prefer the
+    # physical key so right modifiers, keypad and non-US layouts survive.
+    if QApplication.platformName() == "xcb" and event.nativeScanCode() >= 8:
+        try:
+            return keycode_to_str(event.nativeScanCode() - 8)
+        except ProfileError:
+            pass
     key = event.key()
+    if event.modifiers() & Qt.KeyboardModifier.KeypadModifier:
+        if Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+            return f"KEY_KP{key - Qt.Key.Key_0}"
+        keypad = {
+            Qt.Key.Key_Enter: "KEY_KPENTER",
+            Qt.Key.Key_Return: "KEY_KPENTER",
+            Qt.Key.Key_Plus: "KEY_KPPLUS",
+            Qt.Key.Key_Minus: "KEY_KPMINUS",
+            Qt.Key.Key_Asterisk: "KEY_KPASTERISK",
+            Qt.Key.Key_Slash: "KEY_KPSLASH",
+            Qt.Key.Key_Period: "KEY_KPDOT",
+            Qt.Key.Key_Equal: "KEY_KPEQUAL",
+        }
+        if key in keypad:
+            return keypad[key]
     if Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
         return f"KEY_{chr(ord('A') + key - Qt.Key.Key_A)}"
     if Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
@@ -89,7 +128,7 @@ def shortcut_key_names(event: QKeyEvent) -> list[str]:
         (Qt.KeyboardModifier.ShiftModifier, "KEY_LEFTSHIFT"),
         (Qt.KeyboardModifier.MetaModifier, "KEY_LEFTMETA"),
     ):
-        if modifiers & flag and name != base:
+        if modifiers & flag and base not in (name, name.replace("LEFT", "RIGHT")):
             names.append(name)
     names.append(base)
     return names
@@ -120,44 +159,100 @@ def friendly_control(name: str) -> str:
     }.get(name, name)
 
 
-class KeyCaptureButton(QPushButton):
+class KeyboardRecorderButton(QPushButton):
+    """Consume keyboard input before Qt focus, shortcut and button handling."""
+
+    def recording(self) -> bool:
+        return False
+
+    def event(self, event: QEvent) -> bool:
+        if self.recording():
+            if event.type() == QEvent.Type.ShortcutOverride:
+                event.accept()
+                return True
+            if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                if not event.isAutoRepeat():
+                    self.record_key(event, event.type() == QEvent.Type.KeyPress)
+                event.accept()
+                return True
+            if event.type() in (QEvent.Type.Hide, QEvent.Type.WindowDeactivate):
+                self.cancel_recording()
+        return super().event(event)
+
+    def record_key(self, event: QKeyEvent, down: bool) -> None:
+        raise NotImplementedError
+
+    def cancel_recording(self) -> None:
+        raise NotImplementedError
+
+
+class KeyCaptureButton(KeyboardRecorderButton):
     captured = Signal(list)
 
     def __init__(self) -> None:
         super().__init__("Capture key")
         self._capturing = False
+        self._held: set[str] = set()
+        self._names: list[str] = []
         self.clicked.connect(self._begin)
 
+    def recording(self) -> bool:
+        return getattr(self, "_capturing", False)
+
     def _begin(self) -> None:
+        self._held.clear()
+        self._names.clear()
         self._capturing = True
-        self.setText("Press a key or shortcut…")
+        self.setText("Press and release a key or shortcut…")
         self.setFocus(Qt.FocusReason.OtherFocusReason)
         self.grabKeyboard()
 
-    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if self._capturing and not event.isAutoRepeat():
-            names = shortcut_key_names(event)
-            if names:
-                self._capturing = False
-                self.releaseKeyboard()
-                self.setText("Capture key")
+    def cancel_recording(self) -> None:
+        self._capturing = False
+        self.releaseKeyboard()
+        self._held.clear()
+        self._names.clear()
+        self.setText("Capture key")
+
+    def record_key(self, event: QKeyEvent, down: bool) -> None:
+        code = event_key_name(event)
+        if code is None:
+            self.setText("Unsupported key; try another…")
+            return
+        if down:
+            self._held.add(code)
+            # Real modifier presses are retained until their releases, so
+            # Ctrl+Alt+K does not finish as soon as Ctrl is pressed.
+            names = [code] if self._names else shortcut_key_names(event)
+            for name in names:
+                if name not in self._names:
+                    self._names.append(name)
+        elif code in self._held:
+            self._held.remove(code)
+            if not self._held:
+                names = self._names.copy()
+                self.cancel_recording()
                 self.captured.emit(names)
-                event.accept()
-                return
-        super().keyPressEvent(event)
 
 
-class MacroRecorder(QPushButton):
+class MacroRecorder(KeyboardRecorderButton):
     recorded = Signal(list)
 
     def __init__(self) -> None:
         super().__init__("Record sequence")
         self.setCheckable(True)
         self._events: list[dict] = []
+        self._held: dict[str, None] = {}
+        self._previous_events: list[dict] = []
         self._last_time: float | None = None
         self.clicked.connect(self._toggle)
 
+    def recording(self) -> bool:
+        return self.isChecked()
+
     def set_events(self, events: list[dict]) -> None:
+        if self.recording():
+            self.cancel_recording()
         self._events = copy.deepcopy(events)
         self._update_text()
 
@@ -166,15 +261,28 @@ class MacroRecorder(QPushButton):
 
     def _toggle(self, checked: bool) -> None:
         if checked:
+            self._previous_events = self.events()
             self._events = []
+            self._held.clear()
             self._last_time = None
             self.setText("Recording… click to stop")
             self.setFocus(Qt.FocusReason.OtherFocusReason)
             self.grabKeyboard()
         else:
+            # Clicking Stop with keys held must still produce a balanced macro.
+            for code in reversed(self._held):
+                self._append_event(code, False)
+            self._held.clear()
             self.releaseKeyboard()
             self._update_text()
             self.recorded.emit(self.events())
+
+    def cancel_recording(self) -> None:
+        self.setChecked(False)
+        self.releaseKeyboard()
+        self._held.clear()
+        self._events = self._previous_events
+        self._update_text()
 
     def _update_text(self) -> None:
         if self._events:
@@ -182,29 +290,26 @@ class MacroRecorder(QPushButton):
         else:
             self.setText("Record sequence")
 
-    def _record_event(self, event: QKeyEvent, down: bool) -> bool:
-        if not self.isChecked() or event.isAutoRepeat():
-            return False
-        code = event_key_name(event)
-        if code is None:
-            return False
+    def _append_event(self, code: str, down: bool) -> None:
         now = time.monotonic()
         delay = 0 if self._last_time is None else round((now - self._last_time) * 1000)
         self._last_time = now
         self._events.append({"code": code, "down": down, "delay_ms": min(delay, 600_000)})
-        return True
 
-    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if self._record_event(event, True):
-            event.accept()
+    def record_key(self, event: QKeyEvent, down: bool) -> None:
+        code = event_key_name(event)
+        if code is None:
+            self.setText("Unsupported key ignored; click to stop")
             return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if self._record_event(event, False):
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
+        if down:
+            if code in self._held:
+                return
+            self._held[code] = None
+        else:
+            if code not in self._held:
+                return
+            del self._held[code]
+        self._append_event(code, down)
 
 
 class ProfileInspector(QFrame):
@@ -443,6 +548,9 @@ class ProfileInspector(QFrame):
             self.set_profile(self._profile)
 
     def _load_selected_action(self) -> None:
+        for recorder in (self.capture_button, self.macro_recorder):
+            if recorder.recording():
+                recorder.cancel_recording()
         if self._draft is None or self._selected_key is None:
             return
         key = self._selected_key
@@ -499,11 +607,15 @@ class ProfileInspector(QFrame):
         key = self._selected_key
         self._draft.setdefault("bindings", {}).pop(key, None)
         self._draft.setdefault("macros", {}).pop(key, None)
-        if mode == "single":
+        if mode == "single" and len(names) == 1:
             code = names[-1]
             self._draft["bindings"][key] = code
             self.assignment.setText(friendly_key(code))
         else:
+            if mode == "single":
+                self.action_combo.blockSignals(True)
+                self.action_combo.setCurrentIndex(self.action_combo.findData("shortcut"))
+                self.action_combo.blockSignals(False)
             events = shortcut_events(names)
             self._draft["macros"][key] = events
             self.assignment.setText(" + ".join(friendly_key(name) for name in names))
@@ -563,20 +675,12 @@ class ProfileInspector(QFrame):
         if preset_name is None:
             return
         preset = PRESETS_BY_NAME[preset_name]
-        auxiliary_bindings = {
-            key: value
-            for key, value in self._draft.get("bindings", {}).items()
-            if not (key.startswith("G") and key[1:].isdigit())
-        }
-        auxiliary_macros = {
-            key: value
-            for key, value in self._draft.get("macros", {}).items()
-            if not (key.startswith("G") and key[1:].isdigit())
-        }
         self._draft["name"] = preset.name
         self._draft["color"] = list(preset.color)
-        self._draft["bindings"] = {**auxiliary_bindings, **copy.deepcopy(preset.bindings)}
-        self._draft["macros"] = {**auxiliary_macros, **copy.deepcopy(preset.macros)}
+        self._draft["bindings"] = copy.deepcopy(preset.bindings)
+        self._draft["macros"] = copy.deepcopy(preset.macros)
+        self._draft["stick_mode"] = "keys"
+        self.stick_mode_combo.setCurrentIndex(self.stick_mode_combo.findData("keys"))
         self.name_edit.setText(preset.name)
         self._set_color_button(preset.color)
         self.preview_color.emit(preset.color)

@@ -1,0 +1,41 @@
+slot = 1
+name = "Cyberpunk 2077"
+color = [
+    255,
+    220,
+    0,
+]
+backlight_intensity = 60
+stick_mode = "keys"
+lcd_image = "../game-art/splash-cyberpunk-2077-160x43.png"
+
+[bindings]
+G1 = "KEY_ESC"
+G2 = "KEY_1"
+G3 = "KEY_Q"
+G4 = "KEY_W"
+G5 = "KEY_E"
+G6 = "KEY_R"
+G7 = "KEY_H"
+G8 = "KEY_TAB"
+G9 = "KEY_X"
+G10 = "KEY_A"
+G11 = "KEY_S"
+G12 = "KEY_D"
+G13 = "KEY_F"
+G14 = "KEY_R"
+G15 = "KEY_LEFTSHIFT"
+G16 = "KEY_B"
+G17 = "KEY_G"
+G18 = "KEY_C"
+G19 = "KEY_LEFTALT"
+G20 = "KEY_X"
+G21 = "KEY_V"
+G22 = "KEY_SPACE"
+DOWN = "KEY_V"
+LEFT = "KEY_T"
+STICK_DOWN = "KEY_DOWN"
+STICK_LEFT = "KEY_LEFT"
+STICK_RIGHT = "KEY_RIGHT"
+STICK_UP = "KEY_UP"
+TOP = "BTN_MIDDLE"

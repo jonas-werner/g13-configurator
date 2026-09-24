@@ -5,3 +5,13 @@ build/
 dist/
 *.egg-info/
 GITIGNORE-US/
+
+# Local credentials, diagnostics, and editor state
+.env
+.env.*
+*.pem
+*.key
+*.log
+.pytest_cache/
+.agents/
+.codex/

@@ -20,6 +20,7 @@ from g13.daemon.service import (
     stick_direction_keys,
 )
 from g13.hardware.lcd import BACKLIGHT_VALUE, MODE_LEDS_VALUE
+from g13.hardware.report import KEY_NAMES
 from g13.profile import MacroEvent, ensure_default_profiles, load_profiles
 
 
@@ -129,6 +130,49 @@ class DaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.daemon._mode_led_mask(), 0)
         with self.assertRaisesRegex(ValueError, "no profile assigned"):
             await self.daemon.switch_profile_by_slot(1)
+
+    async def test_input_only_switches_profiles_for_assigned_m_keys(self) -> None:
+        original = self.daemon.profiles[0]
+        cyberpunk = replace(
+            self.daemon.profiles[1], slot=1, name="Cyberpunk 2077",
+            bindings={"G8": ecodes.KEY_TAB},
+        )
+        self.daemon.profiles = [
+            cyberpunk,
+            replace(self.daemon.profiles[2], slot=3),
+            replace(original, slot=None, name="The Ascent"),
+        ]
+        self.daemon.active_index = 0
+
+        async def feed(*key_sets: tuple[str, ...]) -> None:
+            reports = []
+            for keys in key_sets:
+                report = bytearray([1, 128, 128, 0, 0, 0, 0, 0])
+                for key in keys:
+                    index = KEY_NAMES.index(key)
+                    report[3 + index // 8] |= 1 << (index % 8)
+                reports.append(bytes(report))
+            with patch.object(
+                self.g13, "read_report", create=True,
+                side_effect=[*reports, EOFError("end of reports")],
+            ):
+                with self.assertRaises(EOFError):
+                    await self.daemon.input_loop()
+
+        await feed((), ("G8",), (), ("M2",), ())
+        self.assertEqual(self.daemon.active_profile.id, cyberpunk.id)
+        self.assertEqual(self.ui.events, [
+            (ecodes.EV_KEY, ecodes.KEY_TAB, 1),
+            (ecodes.EV_KEY, ecodes.KEY_TAB, 0),
+        ])
+        await feed(("M3",), ())
+        self.assertEqual(self.daemon.active_profile.slot, 3)
+        await feed(("M1",), (), ("G8",), ())
+        self.assertEqual(self.daemon.active_profile.id, cyberpunk.id)
+        self.assertEqual(self.ui.events[-2:], [
+            (ecodes.EV_KEY, ecodes.KEY_TAB, 1),
+            (ecodes.EV_KEY, ecodes.KEY_TAB, 0),
+        ])
 
     async def test_final_profile_cannot_be_deleted(self) -> None:
         for profile in list(self.daemon.profiles[1:]):

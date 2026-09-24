@@ -441,7 +441,9 @@ class G13Daemon:
                 (
                     index
                     for index, profile in enumerate(self.profiles)
-                    if profile.slot == switch_slot and index != self.active_index
+                    if switch_slot is not None
+                    and profile.slot == switch_slot
+                    and index != self.active_index
                 ),
                 None,
             )

@@ -30,11 +30,29 @@ class ProfileTests(unittest.TestCase):
             profiles = load_profiles(path)
 
             self.assertEqual([profile.slot for profile in profiles], [1, 2, 3])
-            self.assertEqual([profile.name for profile in profiles], ["Profile 1", "Profile 2", "Profile 3"])
-            self.assertEqual(profiles[0].bindings["LEFT"], ecodes.BTN_LEFT)
-            self.assertEqual(profiles[0].bindings["DOWN"], ecodes.BTN_RIGHT)
+            self.assertEqual([profile.name for profile in profiles], ["Cyberpunk 2077", "Profile 2", "Profile 3"])
+            self.assertEqual(profiles[0].bindings["LEFT"], ecodes.KEY_T)
+            self.assertEqual(profiles[0].bindings["DOWN"], ecodes.KEY_V)
             self.assertEqual(profiles[0].bindings["TOP"], ecodes.BTN_MIDDLE)
             self.assertEqual(profiles[0].bindings["STICK_UP"], ecodes.KEY_UP)
+
+    def test_cyberpunk_export_matches_first_run_and_existing_edits_survive(self) -> None:
+        exported = tomllib.loads(
+            (Path(__file__).resolve().parents[1] / "assets/profiles/cyberpunk-2077.toml").read_text()
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            ensure_default_profiles(path)
+            profile = load_profiles(path)[0]
+            self.assertEqual(profile_to_dict(profile)["bindings"], exported["bindings"])
+            self.assertEqual(profile.backlight_intensity, 60)
+            edited = replace(profile, name="My layout", bindings={"G22": ecodes.KEY_T})
+            save_profile(edited)
+            ensure_default_profiles(path)
+            loaded = load_profiles(path)[0]
+            self.assertEqual(loaded.name, "My layout")
+            self.assertEqual(loaded.bindings["G22"], ecodes.KEY_T)
+            self.assertNotIn("G4", loaded.bindings)
 
     def test_legacy_migration_preserves_recorded_macro(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
