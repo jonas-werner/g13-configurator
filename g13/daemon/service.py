@@ -20,16 +20,18 @@ Run as a script; Ctrl-C to stop.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import stat
 import time
 from dataclasses import replace
 
 import evdev
+import usb.core
 from PIL import Image
 
 from g13.daemon.protocol import SOCKET_PATH, decode, encode
-from g13.hardware.device import G13Device
+from g13.hardware.device import G13Device, G13NotFoundError
 from g13.hardware.lcd import (
     MODE_LED_MR,
     load_frames,
@@ -360,6 +362,24 @@ class G13Daemon:
                     self.ui.write(evdev.ecodes.EV_KEY, code, 0)
                 if held:
                     self.ui.syn()
+
+    async def run_loops(self, server: asyncio.AbstractServer) -> None:
+        """Stop every worker and release input before closing a USB session."""
+        tasks = [asyncio.create_task(loop) for loop in (
+            self.input_loop(), self.mouse_loop(), self.animation_loop(),
+            self.broadcast_loop(), server.serve_forever(),
+        )]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await self._cancel_macros()
+            await self._release_all_held()
+            for writer in tuple(self._subscribers):
+                writer.close()
+            self._subscribers.clear()
 
     async def input_loop(self) -> None:
         while True:
@@ -714,14 +734,32 @@ def prepare_socket_directory(path=SOCKET_PATH) -> None:
 
 
 async def run_async() -> None:
+    waiting = False
+    while True:
+        try:
+            await _run_device_session()
+            return
+        except G13NotFoundError:
+            if not waiting:
+                print("G13 not connected; waiting for device...")
+            waiting = True
+        except usb.core.USBError as exc:
+            if exc.errno != errno.ENODEV:
+                raise
+            print("G13 disconnected; waiting for device...")
+            waiting = True
+        await asyncio.sleep(2)
+
+
+async def _run_device_session() -> None:
     ensure_default_profiles()
     profiles = load_profiles()
     if not profiles:
         raise RuntimeError("no profiles found")
 
-    ui = build_uinput(profiles)
-    try:
-        with G13Device() as g13:
+    with G13Device() as g13:
+        ui = build_uinput(profiles)
+        try:
             daemon = G13Daemon(g13, ui, profiles)
             await daemon.activate_profile(0)
 
@@ -735,16 +773,10 @@ async def run_async() -> None:
                 f"socket: {SOCKET_PATH} (Ctrl-C to stop)..."
             )
             async with server:
-                await asyncio.gather(
-                    daemon.input_loop(),
-                    daemon.mouse_loop(),
-                    daemon.animation_loop(),
-                    daemon.broadcast_loop(),
-                    server.serve_forever(),
-                )
-    finally:
-        ui.close()
-        SOCKET_PATH.unlink(missing_ok=True)
+                await daemon.run_loops(server)
+        finally:
+            ui.close()
+            SOCKET_PATH.unlink(missing_ok=True)
 
 
 def run() -> None:

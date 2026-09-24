@@ -89,6 +89,12 @@ Run:
 .venv/bin/g13-gui
 ```
 
+When the G13 is unplugged, the daemon releases held keys, stops its workers,
+and waits for the device, retrying every two seconds. On reconnection it reloads
+saved profiles and activates the first profile (normally M1), as on startup.
+The GUI reconnects automatically. Normal USB read timeouts are harmless;
+other USB faults still surface instead of being silently ignored.
+
 The daemon starts automatically when you log in. The configurator itself opens
 only when you run the command above.
 

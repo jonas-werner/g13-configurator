@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import tempfile
 import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from evdev import ecodes
 from PIL import Image
+import usb.core
+
+from g13.hardware.device import G13NotFoundError
 
 from g13.daemon.service import (
     G13Daemon,
     _profile_frames,
     _profile_splash,
     mouse_axis_delta,
+    run_async,
+    _run_device_session,
     prepare_socket_directory,
     stick_direction_keys,
 )
@@ -141,6 +147,7 @@ class DaemonTests(unittest.IsolatedAsyncioTestCase):
             cyberpunk,
             replace(self.daemon.profiles[2], slot=3),
             replace(original, slot=None, name="The Ascent"),
+            replace(original, slot=None, name="Another unassigned profile"),
         ]
         self.daemon.active_index = 0
 
@@ -165,6 +172,11 @@ class DaemonTests(unittest.IsolatedAsyncioTestCase):
             (ecodes.EV_KEY, ecodes.KEY_TAB, 1),
             (ecodes.EV_KEY, ecodes.KEY_TAB, 0),
         ])
+        self.daemon.active_index = 2
+        with patch.object(self.daemon, "activate_profile", wraps=self.daemon.activate_profile) as activate:
+            await feed(*((), ("G8",), ()) * 8)
+            self.assertEqual(self.daemon.active_index, 2)
+            activate.assert_not_called()
         await feed(("M3",), ())
         self.assertEqual(self.daemon.active_profile.slot, 3)
         await feed(("M1",), (), ("G8",), ())
@@ -173,6 +185,81 @@ class DaemonTests(unittest.IsolatedAsyncioTestCase):
             (ecodes.EV_KEY, ecodes.KEY_TAB, 1),
             (ecodes.EV_KEY, ecodes.KEY_TAB, 0),
         ])
+
+    async def test_disconnect_stops_workers_releases_keys_and_closes_subscribers(self) -> None:
+        stopped = []
+        async def worker():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.append(True)
+        async def fail():
+            await asyncio.sleep(0)
+            raise usb.core.USBError("unplugged", errno=errno.ENODEV)
+        self.daemon.held = frozenset({"G4"})
+        subscriber = Mock()
+        self.daemon._subscribers.add(subscriber)
+        server = Mock(serve_forever=worker)
+        with patch.object(self.daemon, "input_loop", side_effect=fail), \
+             patch.object(self.daemon, "mouse_loop", side_effect=worker), \
+             patch.object(self.daemon, "animation_loop", side_effect=worker), \
+             patch.object(self.daemon, "broadcast_loop", side_effect=worker):
+            with self.assertRaises(usb.core.USBError):
+                await self.daemon.run_loops(server)
+        self.assertEqual(len(stopped), 4)
+        self.assertFalse(self.daemon.held)
+        self.assertIn((ecodes.EV_KEY, ecodes.KEY_W, 0), self.ui.events)
+        subscriber.close.assert_called_once()
+        self.assertFalse(self.daemon._subscribers)
+
+    async def test_disconnect_and_absence_retry_before_success(self) -> None:
+        with patch("g13.daemon.service._run_device_session", new_callable=AsyncMock) as session, \
+             patch("g13.daemon.service.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            session.side_effect = [usb.core.USBError("gone", errno=errno.ENODEV),
+                                   G13NotFoundError("absent"), None]
+            await run_async()
+            self.assertEqual(session.await_count, 3)
+            self.assertEqual(sleep.await_count, 2)
+            sleep.assert_awaited_with(2)
+
+    async def test_non_disconnect_usb_errors_do_not_retry(self) -> None:
+        with patch("g13.daemon.service._run_device_session", new_callable=AsyncMock) as session, \
+             patch("g13.daemon.service.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            session.side_effect = usb.core.USBError("stalled", errno=errno.EPIPE)
+            with self.assertRaises(usb.core.USBError):
+                await run_async()
+            sleep.assert_not_awaited()
+
+    async def test_device_session_closes_input_and_socket_after_disconnect(self) -> None:
+        socket_path = Path(self.temporary_directory.name) / "daemon.sock"
+        ui = Mock()
+        device_context = Mock()
+        device_context.__enter__ = Mock(return_value=self.g13)
+        device_context.__exit__ = Mock(return_value=False)
+        async def unplugged(*args):
+            raise usb.core.USBError("gone", errno=errno.ENODEV)
+        with patch("g13.daemon.service.ensure_default_profiles"), \
+             patch("g13.daemon.service.load_profiles", return_value=self.daemon.profiles), \
+             patch("g13.daemon.service.G13Device", return_value=device_context), \
+             patch("g13.daemon.service.build_uinput", return_value=ui), \
+             patch("g13.daemon.service.prepare_socket_directory"), \
+             patch("g13.daemon.service.SOCKET_PATH", socket_path), \
+             patch.object(G13Daemon, "input_loop", side_effect=unplugged):
+            with self.assertRaises(usb.core.USBError):
+                await _run_device_session()
+        ui.close.assert_called_once()
+        device_context.__exit__.assert_called_once()
+        self.assertFalse(socket_path.exists())
+
+    async def test_waiting_for_device_does_not_create_virtual_keyboards(self) -> None:
+        with patch("g13.daemon.service.ensure_default_profiles"), \
+             patch("g13.daemon.service.load_profiles", return_value=self.daemon.profiles), \
+             patch("g13.daemon.service.G13Device") as device, \
+             patch("g13.daemon.service.build_uinput") as build:
+            device.return_value.__enter__.side_effect = G13NotFoundError("absent")
+            with self.assertRaises(G13NotFoundError):
+                await _run_device_session()
+            build.assert_not_called()
 
     async def test_final_profile_cannot_be_deleted(self) -> None:
         for profile in list(self.daemon.profiles[1:]):

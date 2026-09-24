@@ -6,6 +6,7 @@ interface so raw reports can be read/written directly via pyusb.
 
 from __future__ import annotations
 
+import errno
 import usb.core
 import usb.util
 
@@ -35,25 +36,39 @@ class G13Device:
                 f"no G13 found (vendor={VENDOR_ID:#06x}, product={PRODUCT_ID:#06x})"
             )
 
-        if dev.is_kernel_driver_active(INTERFACE):
-            dev.detach_kernel_driver(INTERFACE)
-            self._detached_kernel_driver = True
-
-        usb.util.claim_interface(dev, INTERFACE)
         self._dev = dev
+        try:
+            if dev.is_kernel_driver_active(INTERFACE):
+                dev.detach_kernel_driver(INTERFACE)
+                self._detached_kernel_driver = True
+            usb.util.claim_interface(dev, INTERFACE)
+        except usb.core.USBError:
+            # __exit__ is not called when __enter__ fails, including an unplug
+            # between discovery and claiming the interface.
+            try:
+                self.close()
+            except usb.core.USBError:
+                pass  # Preserve the original opening error.
+            raise
 
     def close(self) -> None:
         if self._dev is None:
             return
-        usb.util.release_interface(self._dev, INTERFACE)
-        if self._detached_kernel_driver:
+        dev, self._dev = self._dev, None
+        detached, self._detached_kernel_driver = self._detached_kernel_driver, False
+        try:
             try:
-                self._dev.attach_kernel_driver(INTERFACE)
-            except usb.core.USBError:
-                pass
-        usb.util.dispose_resources(self._dev)
-        self._dev = None
-        self._detached_kernel_driver = False
+                usb.util.release_interface(dev, INTERFACE)
+            except usb.core.USBError as exc:
+                if exc.errno != errno.ENODEV:
+                    raise
+            if detached:
+                try:
+                    dev.attach_kernel_driver(INTERFACE)
+                except usb.core.USBError:
+                    pass
+        finally:
+            usb.util.dispose_resources(dev)
 
     def __enter__(self) -> "G13Device":
         self.open()
