@@ -156,6 +156,23 @@ The assignable joystick controls are:
 Set **Joystick** to **Mouse pointer** if you want the analog stick to move the
 pointer instead of emitting the configured direction keys.
 
+## Viewing mappings and live presses
+
+Turn on **Show mappings** above the device to replace G-key labels with the
+viewed profile's keystrokes. Turn it off to restore G1–G22. This preference
+is remembered when you close the app. Labels update as you edit, apply a
+template, or revert; hover a key for its control name and full mapping.
+Unassigned keys show a dash, shortcuts show their chord, and timed sequences
+show **Macro (event count)**.
+
+The circular **LIVE MAPPING** indicator at the upper left shows the saved
+active profile's mapping for held G13 controls. It lingers for 0.9 seconds
+after release so a tap is easier to read. Simultaneous presses appear together;
+hover the indicator for the full list. Unsaved edits affect the key labels,
+while the live indicator continues to use the saved mapping until **Save**.
+This displays configured actions, not a log of system keyboard events or
+confirmation that a game received them.
+
 ## Starter templates
 
 The **Starter template** menu provides initial mappings for several games.

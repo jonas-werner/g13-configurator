@@ -6,6 +6,45 @@ Cyberpunk is preserved exactly, including duplicate R/X/V bindings and its 60% b
 
 Apply a **Starter template**, inspect it, then **Save**. Templates replace all key and thumb bindings and macros and select directional-stick mode; they retain brightness, LCD media, and M-slot assignment.
 
+## Cyberpunk 2077
+
+This is the saved custom layout, reproduced exactly. The output column is
+what the G13 sends; actions depend on your in-game bindings. Duplicate R,
+X, and V assignments are intentional. The thumbstick sends arrow keys.
+The exported profile uses M1, yellow backlighting at 60%, and the bundled splash.
+
+| G13 control | Output |
+| --- | --- |
+| G1 | ESC |
+| G2 | 1 |
+| G3 | Q |
+| G4 | W |
+| G5 | E |
+| G6 | R |
+| G7 | H |
+| G8 | TAB |
+| G9 | X |
+| G10 | A |
+| G11 | S |
+| G12 | D |
+| G13 | F |
+| G14 | R |
+| G15 | LEFTSHIFT |
+| G16 | B |
+| G17 | G |
+| G18 | C |
+| G19 | LEFTALT |
+| G20 | X |
+| G21 | V |
+| G22 | SPACE |
+| DOWN | V |
+| LEFT | T |
+| STICK_DOWN | DOWN |
+| STICK_LEFT | LEFT |
+| STICK_RIGHT | RIGHT |
+| STICK_UP | UP |
+| TOP | BTN_MIDDLE |
+
 ## DOOM (2016)
 
 Combat keeps glory kill beside D, chainsaw on G17, equipment on G19 and a thumb button, and jump on G22. Q retains access to the full weapon wheel; only three direct weapon slots are included. Shift is walk, not sprint. R switches weapon mods; there is no reload binding.

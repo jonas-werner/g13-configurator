@@ -22,6 +22,7 @@ from PySide6.QtCore import QPointF, QProcess, QSettings, Qt, QTimer, QUrl, Signa
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -355,14 +356,29 @@ class MainWindow(QWidget):
         self.keyboard_view = G13View()
         self.keyboard_view.key_selected.connect(self._on_key_selected)
         self.keyboard_view.lcd_mode_requested.connect(self._on_lcd_mode_requested)
-        content_layout.addWidget(self.keyboard_view, 1)
+        device_column = QVBoxLayout()
+        self.mapping_toggle = QCheckBox("Show mappings")
+        self.mapping_toggle.setToolTip("Replace G-key labels with the viewed profile's mappings, including unsaved edits")
+        self.mapping_toggle.toggled.connect(self.keyboard_view.set_show_mappings)
+        self.mapping_toggle.setChecked(self.settings.value("show_mappings", False, type=bool))
+        device_column.addWidget(self.mapping_toggle)
+        device_column.addWidget(self.keyboard_view, 1)
+        content_layout.addLayout(device_column, 1)
         self.inspector = ProfileInspector()
         self.inspector.save_requested.connect(self._on_profile_save)
         self.inspector.preview_color.connect(self.keyboard_view.set_preview_color)
         self.inspector.preview_intensity.connect(self.keyboard_view.set_preview_intensity)
         self.inspector.lcd_content_changed.connect(self.keyboard_view.set_lcd_content)
+        self.inspector.mappings_changed.connect(self.keyboard_view.set_mapping_profile)
         self.inspector.slot_assignment_requested.connect(self._on_slot_assignment)
-        content_layout.addWidget(self.inspector)
+        inspector_scroll = QScrollArea()
+        inspector_scroll.setWidgetResizable(True)
+        inspector_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inspector_scroll.setFixedWidth(304)
+        self.inspector.setMinimumHeight(self.inspector.sizeHint().height())
+        inspector_scroll.setWidget(self.inspector)
+        content_layout.addWidget(inspector_scroll)
         outer_layout.addLayout(content_layout, 1)
         credit = QLabel(
             f'Made by <a href="https://jonamiki.com" '
@@ -448,11 +464,16 @@ class MainWindow(QWidget):
         try:
             result = self.client.get_profile(profile_id)
         except OSError as exc:
+            if self.keyboard_view.profile_id != profile_id:
+                self.keyboard_view.set_profile({})
             self._show_toast(f"Can't load profile: {exc}", error=True)
             return
         if "error" in result:
+            if self.keyboard_view.profile_id != profile_id:
+                self.keyboard_view.set_profile({})
             self._show_toast(result["error"], error=True)
             return
+        self.keyboard_view.set_profile(result["profile"])
         self.inspector.set_profile(result["profile"])
 
     def _on_key_selected(self, key_id: str) -> None:
@@ -478,6 +499,7 @@ class MainWindow(QWidget):
             self._show_toast(result["error"], error=True)
             return
         saved = result["profile"]
+        self.keyboard_view.set_profile(saved)
         self.inspector.set_profile(saved, show_saved=True)
         self._show_toast(f"Saved {saved['name']}")
         self._refresh_profile_list(load_active=False)
@@ -570,7 +592,11 @@ class MainWindow(QWidget):
         if connected:
             self.status_dot.setStyleSheet(f"color: {theme.SUCCESS}; font-size: 10px;")
             self.status_text.setText("Daemon connected")
+            # A GUI started before the daemon (or during a restart) may have
+            # missed its initial profile fetch. Populate mappings on reconnect.
+            self._refresh_profile_list(load_active=not self.inspector.is_dirty)
         else:
+            self.keyboard_view.clear_live_state()
             self.status_dot.setStyleSheet(f"color: {theme.DANGER}; font-size: 10px;")
             self.status_text.setText("Daemon offline")
 
@@ -600,6 +626,7 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("show_mappings", self.mapping_toggle.isChecked())
         self.listener.stop()
         super().closeEvent(event)
 

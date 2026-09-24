@@ -6,21 +6,25 @@ G1-G22 labels and the LCD screen cut to transparent, so the fill shines
 through as glowing text/screen exactly like the real hardware (confirmed
 against a reference photo), with no glow effect or hand-drawn text
 needed. A bright ring on whatever's currently held makes presses easy to
-spot. Geometry comes from device_layout.py (data); this widget is a pure
-drawing layer -- no device I/O or profile logic lives here.
+spot. Optional mapped legends and a live mapping badge use profile snapshots;
+this widget never emits input or writes profiles. Geometry comes from
+device_layout.py.
 """
 
 from __future__ import annotations
 
 import math
+import copy
 from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import QRectF, QSize, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from g13.gui import theme
+from g13.gui.mapping_labels import mapping_label
+from g13.profile import ASSIGNABLE_CONTROL_IDS
 from g13.gui.device_layout import (
     ASSET_PATH,
     BACKLIT_BY_PROFILE,
@@ -65,6 +69,14 @@ class G13View(QWidget):
         self._intensity = 100
         self._preview_intensity: int | None = None
         self._keys: frozenset[str] = frozenset()
+        self._profile: dict = {}
+        self._mapping_profile: dict = {}
+        self._show_mappings = False
+        self._live_controls: list[str] = []
+        self._live_timer = QTimer(self)
+        self._live_timer.setSingleShot(True)
+        self._live_timer.timeout.connect(self._clear_live_controls)
+        self.setMouseTracking(True)
         self._selected_key: str | None = None
         self._stick = (_STICK_REST, _STICK_REST)
         self._pixmap = QPixmap(str(ASSET_PATH))
@@ -92,9 +104,54 @@ class G13View(QWidget):
             self._color = new_color
             self._intensity = intensity
             self._lcd_render_cache = None
+        previous = self._keys & ASSIGNABLE_CONTROL_IDS
+        pressed = keys & ASSIGNABLE_CONTROL_IDS
+        if pressed != previous:
+            if pressed:
+                self._live_timer.stop()
+                self._live_controls = sorted(pressed, key=self._control_order)
+            elif previous:
+                self._live_timer.start(900)
         self._keys = keys
         self._stick = stick
         self.update()
+
+    @staticmethod
+    def _control_order(control: str) -> tuple[int, str]:
+        return (int(control[1:]), "") if control.startswith("G") else (100, control)
+
+    def set_profile(self, profile: dict) -> None:
+        """Saved profile drives the live badge; draft edits only change labels."""
+        self._profile = copy.deepcopy(profile)
+        self.set_mapping_profile(profile)
+        self.clear_live_state()
+
+    def set_mapping_profile(self, profile: dict) -> None:
+        self._mapping_profile = copy.deepcopy(profile)
+        self.update()
+
+    @property
+    def profile_id(self) -> str | None:
+        return self._profile.get("id")
+
+    def set_show_mappings(self, enabled: bool) -> None:
+        self._show_mappings = enabled
+        self.update()
+
+    def clear_live_state(self) -> None:
+        self._keys = frozenset()
+        self._live_timer.stop()
+        self._clear_live_controls()
+
+    def _clear_live_controls(self) -> None:
+        self._live_controls = []
+        self.update()
+
+    def live_mapping_text(self) -> str:
+        return "\n".join(
+            f"{control}: {mapping_label(self._profile, control)}"
+            for control in self._live_controls
+        )
 
     def set_selected_key(self, key_id: str | None) -> None:
         self._selected_key = key_id
@@ -207,12 +264,84 @@ class G13View(QWidget):
 
         painter.drawPixmap(0, 0, self._pixmap)
 
+        if self._show_mappings:
+            self._draw_mapping_labels(painter)
         self._draw_selection(painter)
 
         for key in KEYS:
             if self._is_active(key.id):
                 self._draw_press_ring(painter, key)
         self._draw_joystick(painter)
+        self._draw_live_indicator(painter)
+
+    def _draw_fitted_text(self, painter: QPainter, rect: QRectF, text: str,
+                          maximum: int = 28, minimum: int = 15) -> None:
+        font = QFont(painter.font())
+        font.setBold(True)
+        flags = Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap
+        for size in range(maximum, minimum - 1, -1):
+            font.setPixelSize(size)
+            painter.setFont(font)
+            bounds = painter.boundingRect(rect, flags, text)
+            if bounds.width() <= rect.width() and bounds.height() <= rect.height():
+                painter.drawText(rect, flags, text)
+                return
+        # Long shortcuts remain fully available on hover and in the inspector.
+        text = painter.fontMetrics().elidedText(text.replace("\n", " "),
+                                              Qt.TextElideMode.ElideRight, int(rect.width()))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _draw_mapping_labels(self, painter: QPainter) -> None:
+        painter.save()
+        for key in (*G_KEYS, LEFT, DOWN):
+            rect = QRectF(key.x, key.y, key.w, key.h).adjusted(3, 3, -3, -3)
+            # Opaque faces hide the original transparent G-number legends.
+            painter.setPen(QPen(QColor(theme.BORDER), 2))
+            painter.setBrush(QColor(theme.SURFACE))
+            painter.drawRoundedRect(rect, 9, 9)
+            label = mapping_label(self._mapping_profile, key.id)
+            painter.setPen(QColor(theme.TEXT_MUTED if label == "Unassigned" else theme.TEXT))
+            self._draw_fitted_text(painter, rect.adjusted(5, 5, -5, -5),
+                                   "—" if label == "Unassigned" else label)
+        painter.restore()
+
+    def _draw_live_indicator(self, painter: QPainter) -> None:
+        painter.save()
+        painter.resetTransform()
+        scale, left, top = self._indicator_transform()
+        painter.translate(left, top)
+        painter.scale(scale, scale)
+        circle = QRectF(14, 20, 230, 230)
+        live = bool(self._live_controls)
+        painter.setBrush(QColor(theme.SURFACE))
+        painter.setPen(QPen(QColor(theme.ACCENT_HI if live else theme.BORDER), 4))
+        painter.drawEllipse(circle)
+        painter.setPen(QColor(theme.TEXT_MUTED))
+        self._draw_fitted_text(painter, QRectF(45, 53, 168, 30), "LIVE MAPPING", 18)
+        painter.setPen(QColor(theme.TEXT if live else theme.TEXT_MUTED))
+        lines = self.live_mapping_text().splitlines()
+        if len(lines) > 3:
+            lines = [*lines[:2], f"+{len(lines) - 2} more"]
+        self._draw_fitted_text(painter, QRectF(35, 88, 188, 104),
+                               "\n".join(lines) if live else "Press a G13 key", 30, 17)
+        painter.restore()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        scale, offset_x, offset_y = self._transform()
+        x = (event.position().x() - offset_x) / scale
+        y = (event.position().y() - offset_y) / scale
+        text = ""
+        indicator_scale, left, top = self._indicator_transform()
+        if QRectF(left + 14 * indicator_scale, top + 20 * indicator_scale,
+                  230 * indicator_scale, 230 * indicator_scale).contains(event.position()):
+            text = self.live_mapping_text() or "Mappings from the saved active profile"
+        else:
+            for key in (*G_KEYS, LEFT, DOWN):
+                if QRectF(key.x, key.y, key.w, key.h).contains(x, y):
+                    text = f"{key.id}: {mapping_label(self._mapping_profile, key.id)}"
+                    break
+        self.setToolTip(text)
+        super().mouseMoveEvent(event)
 
     def _advance_lcd(self) -> None:
         if self._lcd_mode == "clock":
@@ -305,6 +434,14 @@ class G13View(QWidget):
             (self.width() - IMAGE_W * scale) / 2,
             (self.height() - IMAGE_H * scale) / 2,
         )
+
+    def _indicator_transform(self) -> tuple[float, float, float]:
+        scale, offset_x, offset_y = self._transform()
+        # Shift only the badge into the empty upper-left margin. Keep it inside
+        # the widget at narrow sizes without changing the device's scale.
+        shift = 100 * scale
+        return (scale, max(0, offset_x - shift),
+                max(0, offset_y - max(0, shift - offset_x)))
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton:

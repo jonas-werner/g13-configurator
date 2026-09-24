@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt
 from PySide6.QtGui import QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton, QVBoxLayout, QWidget
@@ -20,6 +20,13 @@ from g13.gui.binding_editor import (
 )
 from g13.gui.device_layout import ASSET_PATH, G_KEYS, IMAGE_H, IMAGE_W
 from g13.gui.keyboard_view import G13View
+from g13.gui.mapping_labels import mapping_label
+from g13.gui.main import MainWindow
+
+
+def device_point(view: G13View, x: float, y: float) -> QPoint:
+    scale, ox, oy = view._transform()
+    return QPoint(round(ox + x * scale), round(oy + y * scale))
 
 
 class GuiTests(unittest.TestCase):
@@ -30,6 +37,116 @@ class GuiTests(unittest.TestCase):
     def test_required_device_image_is_bundled(self) -> None:
         self.assertTrue(ASSET_PATH.is_file())
 
+    def test_mapping_labels_distinguish_chords_sequences_and_unassigned(self) -> None:
+        self.assertEqual(mapping_label({}, "G4"), "Not loaded")
+        profile = {
+            "bindings": {"G1": "KEY_A", "G2": "BTN_RIGHT"},
+            "macros": {"G1": shortcut_events(["KEY_LEFTCTRL", "KEY_K"])},
+        }
+        self.assertEqual(mapping_label(profile, "G1"), "L Ctrl + K")
+        self.assertEqual(mapping_label(profile, "G2"), "Mouse 2")
+        self.assertEqual(mapping_label(profile, "G3"), "Unassigned")
+        profile["macros"]["G1"][1]["delay_ms"] = 20
+        self.assertEqual(mapping_label(profile, "G1"), "Macro (4)")
+        profile["stick_mode"] = "mouse"
+        self.assertEqual(mapping_label(profile, "STICK_UP"), "Pointer")
+
+    def test_live_indicator_does_not_shrink_the_device(self) -> None:
+        view = G13View()
+        for width, height in ((240, 320), (543, 724), (900, 850)):
+            view.resize(width, height)
+            scale, ox, oy = view._transform()
+            self.assertEqual(scale, min(width / IMAGE_W, height / IMAGE_H))
+            self.assertGreaterEqual(oy, 0)
+            self.assertGreaterEqual(ox, 0)
+            self.assertLessEqual(oy + IMAGE_H * scale, height)
+            badge_scale, badge_x, badge_y = view._indicator_transform()
+            self.assertEqual(badge_scale, scale)
+            self.assertLessEqual(badge_x, ox)
+            self.assertGreaterEqual(badge_x, 0)
+            self.assertLessEqual(badge_y, oy)
+            self.assertGreaterEqual(badge_y, 0)
+
+    def test_reconnect_loads_mappings_after_initial_daemon_failure(self) -> None:
+        profile = {"id": "cyberpunk", "name": "Cyberpunk 2077", "slot": 1,
+                   "color": [255, 220, 0], "bindings": {"G4": "KEY_W"}, "macros": {}}
+        client = MagicMock()
+        client.list_profiles.side_effect = [OSError("Daemon starting"), {
+            "profiles": [profile], "active_id": "cyberpunk", "active_slot": 1,
+        }]
+        client.get_profile.return_value = {"profile": profile}
+        with tempfile.TemporaryDirectory() as directory:
+            settings = QSettings(str(Path(directory) / "gui.ini"), QSettings.Format.IniFormat)
+            with patch("g13.gui.main.DaemonClient", return_value=client), \
+                 patch("g13.gui.main.StateListener"), \
+                 patch("g13.gui.main.QSettings", return_value=settings):
+                window = MainWindow()
+                try:
+                    window._on_connection_changed(True)
+                    view = window.keyboard_view
+                    self.assertEqual(mapping_label(view._mapping_profile, "G4"), "W")
+                    window.mapping_toggle.setChecked(True)
+                    self.assertTrue(view._show_mappings)
+                    # A failed refresh must not erase a successfully loaded profile.
+                    client.get_profile.side_effect = OSError("Temporary failure")
+                    window._load_profile("cyberpunk")
+                    self.assertEqual(mapping_label(view._mapping_profile, "G4"), "W")
+                    self.assertEqual(window.inspector._draft["bindings"]["G4"], "KEY_W")
+                finally:
+                    window.close()
+                self.assertTrue(settings.value("show_mappings", type=bool))
+
+    def test_live_badge_uses_saved_mapping_and_clears_after_release(self) -> None:
+        view = G13View()
+        view.set_profile({"bindings": {"G4": "KEY_W", "G15": "KEY_LEFTSHIFT"}})
+        view.set_mapping_profile({"bindings": {"G4": "KEY_F"}})
+        view.set_state((255, 220, 0), frozenset({"G4", "G15"}))
+        self.assertEqual(view.live_mapping_text(), "G4: W\nG15: L Shift")
+        view.set_state((255, 220, 0), frozenset())
+        self.assertIn("G4: W", view.live_mapping_text())
+        # A repeated idle state must not extend the release timeout.
+        QTest.qWait(500)
+        view.set_state((255, 220, 0), frozenset())
+        QTest.qWait(500)
+        self.assertEqual(view.live_mapping_text(), "")
+
+    def test_live_badge_resets_on_profile_change_and_disconnect(self) -> None:
+        view = G13View()
+        view.set_profile({"bindings": {"G4": "KEY_W"}})
+        view.set_state((1, 2, 3), frozenset({"G4", "M1"}))
+        self.assertEqual(view.live_mapping_text(), "G4: W")
+        view.set_profile({"bindings": {"G4": "KEY_E"}})
+        self.assertEqual(view.live_mapping_text(), "")
+        view.set_state((1, 2, 3), frozenset({"G4"}))
+        self.assertEqual(view.live_mapping_text(), "G4: E")
+        view.clear_live_state()
+        self.assertEqual(view.live_mapping_text(), "")
+        self.assertFalse(view._keys)
+
+    def test_mapping_toggle_preserves_selection_and_draft_updates(self) -> None:
+        view = G13View()
+        view.resize(IMAGE_W // 2, IMAGE_H // 2)
+        inspector = ProfileInspector()
+        inspector.mappings_changed.connect(view.set_mapping_profile)
+        inspector.set_profile({
+            "id": "test", "slot": 1, "name": "Test", "color": [1, 2, 3],
+            "bindings": {"G4": "KEY_W"}, "macros": {},
+        })
+        view.key_selected.connect(inspector.select_key)
+        view.set_show_mappings(True)
+        key = next(key for key in G_KEYS if key.id == "G4")
+        point = device_point(view, key.x + key.w / 2, key.y + key.h / 2)
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=point)
+        self.assertEqual(view._selected_key, "G4")
+        inspector._captured(["KEY_F"])
+        self.assertEqual(mapping_label(view._mapping_profile, "G4"), "F")
+        inspector.revert()
+        self.assertEqual(mapping_label(view._mapping_profile, "G4"), "W")
+        mapped = view.grab().toImage()
+        view.set_show_mappings(False)
+        self.assertNotEqual(mapped, view.grab().toImage())
+        self.assertEqual(view._selected_key, "G4")
+
     def test_clicking_image_key_selects_g_key(self) -> None:
         view = G13View()
         view.resize(IMAGE_W // 2, IMAGE_H // 2)
@@ -37,7 +154,7 @@ class GuiTests(unittest.TestCase):
         selected: list[str] = []
         view.key_selected.connect(selected.append)
         key = next(key for key in G_KEYS if key.id == "G4")
-        point = QPoint(round((key.x + key.w / 2) / 2), round((key.y + key.h / 2) / 2))
+        point = device_point(view, key.x + key.w / 2, key.y + key.h / 2)
 
         QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=point)
 
@@ -50,10 +167,10 @@ class GuiTests(unittest.TestCase):
         selected: list[str] = []
         view.key_selected.connect(selected.append)
 
-        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(472, 460))
-        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(472, 430))
-        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(472, 490))
-        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(470, 535))
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=device_point(view, 944, 920))
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=device_point(view, 944, 860))
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=device_point(view, 944, 980))
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=device_point(view, 940, 1070))
 
         self.assertEqual(selected, ["TOP", "STICK_UP", "STICK_DOWN", "DOWN"])
 
@@ -64,8 +181,8 @@ class GuiTests(unittest.TestCase):
         modes: list[str] = []
         view.lcd_mode_requested.connect(modes.append)
 
-        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(295, 143))
-        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(140, 140))
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=device_point(view, 590, 286))
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=device_point(view, 280, 280))
 
         self.assertEqual(modes, ["clock", "cycle"])
 

@@ -318,6 +318,7 @@ class ProfileInspector(QFrame):
     preview_intensity = Signal(object)
     lcd_content_changed = Signal(str, object, object)
     slot_assignment_requested = Signal(str, object)
+    mappings_changed = Signal(dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -795,6 +796,8 @@ class ProfileInspector(QFrame):
         )
 
     def _update_dirty_state(self) -> None:
+        if self._draft is not None:
+            self.mappings_changed.emit(copy.deepcopy(self._draft))
         dirty = self.is_dirty
         if dirty:
             self._saved_confirmation = False
