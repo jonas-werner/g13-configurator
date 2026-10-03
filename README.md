@@ -40,11 +40,6 @@ to the virtual environment inside this folder.
 
 ## Requirements
 
-**SteamOS (experimental):** use the [SteamOS setup instructions](docs/steamos.md).
-Run `./install.sh` directly from Desktop Mode; it detects SteamOS and prepares
-its own environment. The manual venv and distribution-package steps below
-are for standard Linux installations.
-
 - A Logitech G13
 - Linux with systemd and udev
 - Python 3.11 or newer
@@ -102,6 +97,9 @@ other USB faults still surface instead of being silently ignored.
 
 The daemon starts automatically when you log in. The configurator itself opens
 only when you run the command above.
+
+Experimental SteamOS support is also available. SteamOS users should follow
+the separate [SteamOS setup instructions](docs/steamos.md).
 
 ## Using profiles
 
