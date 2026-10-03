@@ -564,6 +564,9 @@ class ProfileInspector(QFrame):
             events = self._draft["macros"][key]
             self.macro_recorder.set_events(events)
             self.assignment.setText(f"Macro: {len(events)} events")
+        elif key in self._draft.get("shortcuts", {}):
+            mode = "shortcut"
+            self.assignment.setText(" + ".join(friendly_key(k) for k in self._draft["shortcuts"][key]) + " (held)")
         elif key in self._draft.get("bindings", {}):
             binding = self._draft["bindings"][key]
             mode = "mouse_button" if binding.startswith("BTN_") else "single"
@@ -583,6 +586,7 @@ class ProfileInspector(QFrame):
         if self._loading or self._draft is None or self._selected_key is None:
             return
         mode = self.action_combo.currentData()
+        self._draft.setdefault("shortcuts", {}).pop(self._selected_key, None)
         self._draft.setdefault("bindings", {}).pop(self._selected_key, None)
         self._draft.setdefault("macros", {}).pop(self._selected_key, None)
         if mode == "none":
@@ -609,6 +613,7 @@ class ProfileInspector(QFrame):
             return
         mode = self.action_combo.currentData()
         key = self._selected_key
+        self._draft.setdefault("shortcuts", {}).pop(key, None)
         self._draft.setdefault("bindings", {}).pop(key, None)
         self._draft.setdefault("macros", {}).pop(key, None)
         if mode == "single" and len(names) == 1:
@@ -620,8 +625,7 @@ class ProfileInspector(QFrame):
                 self.action_combo.blockSignals(True)
                 self.action_combo.setCurrentIndex(self.action_combo.findData("shortcut"))
                 self.action_combo.blockSignals(False)
-            events = shortcut_events(names)
-            self._draft["macros"][key] = events
+            self._draft["shortcuts"][key] = list(names)
             self.assignment.setText(" + ".join(friendly_key(name) for name in names))
         self._update_dirty_state()
 
@@ -629,6 +633,7 @@ class ProfileInspector(QFrame):
         if self._draft is None or self._selected_key is None or not events:
             return
         key = self._selected_key
+        self._draft.setdefault("shortcuts", {}).pop(key, None)
         self._draft.setdefault("bindings", {}).pop(key, None)
         self._draft.setdefault("macros", {})[key] = events
         self.assignment.setText(f"Macro: {len(events)} events")
@@ -643,6 +648,7 @@ class ProfileInspector(QFrame):
         ):
             return
         code = self.mouse_button_combo.currentData()
+        self._draft.setdefault("shortcuts", {}).pop(self._selected_key, None)
         self._draft.setdefault("macros", {}).pop(self._selected_key, None)
         self._draft.setdefault("bindings", {})[self._selected_key] = code
         self.assignment.setText(friendly_key(code))
@@ -679,6 +685,8 @@ class ProfileInspector(QFrame):
         if preset_name is None:
             return
         preset = PRESETS_BY_NAME[preset_name]
+        self._draft["shortcuts"] = {}
+        self._draft["shortcut_delay_ms"] = {}
         self._draft["name"] = preset.name
         self._draft["color"] = list(preset.color)
         self._draft["bindings"] = copy.deepcopy(preset.bindings)

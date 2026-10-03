@@ -40,6 +40,11 @@ to the virtual environment inside this folder.
 
 ## Requirements
 
+**SteamOS (experimental):** use the [SteamOS setup instructions](docs/steamos.md).
+Run `./install.sh` directly from Desktop Mode; it detects SteamOS and prepares
+its own environment. The manual venv and distribution-package steps below
+are for standard Linux installations.
+
 - A Logitech G13
 - Linux with systemd and udev
 - Python 3.11 or newer
@@ -134,9 +139,35 @@ assignment type:
 
 - **Unassigned** — the control emits nothing.
 - **Single keystroke** — one keyboard key.
-- **Shortcut** — a chord such as `Ctrl+E` or `Shift+E`.
+- **Shortcut** — a held chord such as `Ctrl+E` or `Space+A`. Keys press in
+  captured order and release in reverse order when you release the G-key or
+  return the joystick to centre. Shared keys stay held until all controls
+  using them are released.
 - **Macro sequence** — timed key presses and releases.
 - **Mouse button** — left, right, middle, back, or forward click.
+
+Held shortcuts are stored separately from timed macros:
+
+```toml
+[shortcuts]
+STICK_LEFT = ["KEY_SPACE", "KEY_A"]
+STICK_RIGHT = ["KEY_SPACE", "KEY_D"]
+```
+
+For games that need time to recognise each key, set an optional per-control
+pause between shortcut presses (0–1000 ms; default 0). Releases remain
+immediate, in reverse order; releasing early cancels pending presses.
+
+```toml
+[shortcuts]
+G19 = ["KEY_LEFTCTRL", "KEY_SPACE", "KEY_S"]
+
+[shortcut_delay_ms]
+G19 = 150
+```
+
+Older shortcuts saved as macros retain their original tap behavior. Recapture
+them as Shortcut to use hold-until-release behavior.
 
 After clicking **Capture key**, press and release the key or chord. Ctrl, Alt,
 Shift, and Super can be assigned alone; combinations automatically become

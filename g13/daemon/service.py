@@ -136,6 +136,9 @@ class G13Daemon:
         self.profiles = profiles
         self.active_index = 0
         self.held: frozenset[str] = frozenset()
+        self._control_outputs: dict[str, list[int]] = {}
+        self._control_timers: dict[str, list[asyncio.TimerHandle]] = {}
+        self._output_counts: dict[int, int] = {}
         self.stick: tuple[int, int] = (128, 128)
         self.device_lock = asyncio.Lock()
         self.frames: list[tuple[Image.Image, int]] = []
@@ -291,14 +294,65 @@ class G13Daemon:
             index for index, profile in enumerate(self.profiles) if profile.id == active_id
         )
 
-    async def _release_all_held(self) -> None:
-        bindings = self.active_profile.bindings
-        for name in self.held:
-            code = bindings.get(name)
-            if code is not None:
-                self.ui.write(evdev.ecodes.EV_KEY, code, 0)
-        if self.held:
+    def _key_down(self, code: int) -> None:
+        count = self._output_counts.get(code, 0)
+        self._output_counts[code] = count + 1
+        if not count:
+            self.ui.write(evdev.ecodes.EV_KEY, code, 1)
             self.ui.syn()
+
+    def _key_up(self, code: int) -> None:
+        count = self._output_counts.get(code, 1)
+        if count > 1:
+            self._output_counts[code] = count - 1
+        else:
+            self._output_counts.pop(code, None)
+            self.ui.write(evdev.ecodes.EV_KEY, code, 0)
+            self.ui.syn()
+
+    def _press_control(self, name: str) -> None:
+        if name in self._control_outputs:
+            return
+        profile = self.active_profile
+        codes = profile.shortcuts.get(name)
+        if codes is None:
+            code = profile.bindings.get(name)
+            codes = [] if code is None else [code]
+        emitted: list[int] = []
+        self._control_outputs[name] = emitted
+        delay = profile.shortcut_delay_ms.get(name, 0) if name in profile.shortcuts else 0
+
+        def press(code: int) -> None:
+            # A released/repressed control must never receive an old delayed key.
+            if self._control_outputs.get(name) is not emitted:
+                return
+            emitted.append(code)
+            self._key_down(code)
+            if self.mr_state == "recording":
+                self._record_event(code, True)
+
+        for index, code in enumerate(codes):
+            if index and delay:
+                timer = asyncio.get_running_loop().call_later(index * delay / 1000, press, code)
+                self._control_timers.setdefault(name, []).append(timer)
+            else:
+                press(code)
+
+    def _release_control(self, name: str) -> None:
+        for timer in self._control_timers.pop(name, []):
+            timer.cancel()
+        for code in reversed(self._control_outputs.pop(name, [])):
+            self._key_up(code)
+
+    async def _release_all_held(self) -> None:
+        # Release the actual emitted keys, even after profile edits or USB loss.
+        for name in list(self._control_outputs):
+            self._release_control(name)
+        for code in list(self._output_counts):
+            self.ui.write(evdev.ecodes.EV_KEY, code, 0)
+        if self._output_counts:
+            self.ui.syn()
+        self._output_counts.clear()
         self.held = frozenset()
 
     def _record_event(self, code: int, down: bool) -> None:
@@ -351,7 +405,7 @@ class G13Daemon:
                 for event in events:
                     if event.delay_ms:
                         await asyncio.sleep(event.delay_ms / 1000)
-                    self.ui.write(evdev.ecodes.EV_KEY, event.code, 1 if event.down else 0)
+                    (self._key_down if event.down else self._key_up)(event.code)
                     if event.down:
                         held.add(event.code)
                     else:
@@ -359,7 +413,7 @@ class G13Daemon:
                     self.ui.syn()
             finally:
                 for code in held:
-                    self.ui.write(evdev.ecodes.EV_KEY, code, 0)
+                    self._key_up(code)
                 if held:
                     self.ui.syn()
 
@@ -433,24 +487,15 @@ class G13Daemon:
                 continue
 
             if self.mr_state == "recording":
-                bindings = self.active_profile.bindings
-                for name in pressed:
-                    code = bindings.get(name)
-                    if code is not None:
-                        self._record_event(code, True)
-                        self.ui.write(evdev.ecodes.EV_KEY, code, 1)
-                        self.ui.syn()
-                for name in released:
+                for name in sorted(pressed):
+                    self._press_control(name)
+                for name in sorted(released):
                     if name == self._pending_target_release:
-                        # the release of the tap that selected the target
-                        # key -- its press was never recorded either
                         self._pending_target_release = None
                         continue
-                    code = bindings.get(name)
-                    if code is not None:
+                    for code in reversed(self._control_outputs.get(name, [])):
                         self._record_event(code, False)
-                        self.ui.write(evdev.ecodes.EV_KEY, code, 0)
-                        self.ui.syn()
+                    self._release_control(name)
                 continue
 
             switch_slot = next(
@@ -474,21 +519,13 @@ class G13Daemon:
                 continue
 
             profile = self.active_profile
-            for name in pressed:
+            for name in sorted(pressed):
                 if name in profile.macros:
                     self._launch_macro(profile.macros[name])
                     continue
-                code = profile.bindings.get(name)
-                if code is not None:
-                    self.ui.write(evdev.ecodes.EV_KEY, code, 1)
-                    self.ui.syn()
-            for name in released:
-                if name in profile.macros:
-                    continue
-                code = profile.bindings.get(name)
-                if code is not None:
-                    self.ui.write(evdev.ecodes.EV_KEY, code, 0)
-                    self.ui.syn()
+                self._press_control(name)
+            for name in sorted(released):
+                self._release_control(name)
 
     async def mouse_loop(self) -> None:
         while True:

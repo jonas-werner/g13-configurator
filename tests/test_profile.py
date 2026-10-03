@@ -23,6 +23,29 @@ from g13.profile import (
 
 
 class ProfileTests(unittest.TestCase):
+    def test_held_shortcuts_round_trip_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            ensure_default_profiles(path)
+            original = load_profiles(path)[0]
+            updated = profile_from_payload(original, {
+                "shortcuts": {"STICK_LEFT": ["KEY_SPACE", "KEY_A"]},
+                "shortcut_delay_ms": {"STICK_LEFT": 150},
+            })
+            self.assertNotIn("STICK_LEFT", updated.bindings)
+            save_profile(updated)
+            ensure_default_profiles(path)
+            loaded = next(p for p in load_profiles(path) if p.id == original.id)
+            self.assertEqual(loaded.shortcuts, {"STICK_LEFT": [ecodes.KEY_SPACE, ecodes.KEY_A]})
+            self.assertNotIn("STICK_LEFT", loaded.bindings)
+            self.assertEqual(loaded.shortcut_delay_ms, {"STICK_LEFT": 150})
+            for delay in (-1, 1001, True, "150"):
+                with self.assertRaises(ProfileError):
+                    profile_from_payload(original, {"shortcut_delay_ms": {"G19": delay}})
+            for invalid in ([], ["KEY_A", "KEY_A"], ["bad"], "KEY_A", [1]):
+                with self.subTest(invalid=invalid), self.assertRaises(ProfileError):
+                    profile_from_payload(original, {"shortcuts": {"STICK_LEFT": invalid}})
+
     def test_defaults_create_three_slots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

@@ -34,5 +34,8 @@ def mapping_label(profile: dict, control: str) -> str:
         if len(downs) > 1 and len(set(downs)) == len(downs) and events == expected:
             return " + ".join(key_label(code) for code in downs)
         return f"Macro ({len(events)})"
+    keys = profile.get("shortcuts", {}).get(control)
+    if keys:
+        return " + ".join(key_label(code) for code in keys) + " (held)"
     code = profile.get("bindings", {}).get(control)
     return key_label(code) if code else "Unassigned"

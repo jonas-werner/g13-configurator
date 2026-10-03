@@ -49,6 +49,8 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(mapping_label(profile, "G3"), "Unassigned")
         profile["macros"]["G1"][1]["delay_ms"] = 20
         self.assertEqual(mapping_label(profile, "G1"), "Macro (4)")
+        profile["shortcuts"] = {"STICK_LEFT": ["KEY_SPACE", "KEY_A"]}
+        self.assertEqual(mapping_label(profile, "STICK_LEFT"), "Space + A (held)")
         profile["stick_mode"] = "mouse"
         self.assertEqual(mapping_label(profile, "STICK_UP"), "Pointer")
 
@@ -449,8 +451,10 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(inspector._draft["bindings"]["G4"], "KEY_W")
         inspector._captured(["KEY_LEFTCTRL", "KEY_K"])
         self.assertEqual(inspector.action_combo.currentData(), "shortcut")
-        self.assertEqual(inspector._draft["macros"]["G4"],
-                         shortcut_events(["KEY_LEFTCTRL", "KEY_K"]))
+        self.assertEqual(inspector._draft["shortcuts"]["G4"], ["KEY_LEFTCTRL", "KEY_K"])
+        inspector.set_profile(inspector._draft.copy())
+        inspector.select_key("G4")
+        self.assertEqual(inspector.action_combo.currentData(), "shortcut")
         inspector.revert()
         self.assertFalse(inspector.is_dirty)
 
@@ -489,6 +493,7 @@ class GuiTests(unittest.TestCase):
             "id": "custom", "slot": 3, "name": "Custom", "color": [1, 2, 3],
             "backlight_intensity": 45, "stick_mode": "mouse",
             "bindings": {"G2": "KEY_1", "LEFT": "BTN_LEFT"},
+            "shortcuts": {"STICK_LEFT": ["KEY_SPACE", "KEY_A"]},
             "macros": {"LEFT": shortcut_events(["KEY_A"]),
                        "G9": shortcut_events(["KEY_B"])},
             "lcd_image": None, "lcd_gif": None,
@@ -498,6 +503,7 @@ class GuiTests(unittest.TestCase):
         draft = inspector._draft
         self.assertEqual(draft["bindings"]["LEFT"], "KEY_C")
         self.assertEqual(draft["macros"], {})
+        self.assertEqual(draft["shortcuts"], {})
         self.assertNotIn("G2", draft["bindings"])
         self.assertNotIn("G9", draft["bindings"])
         self.assertEqual(draft["stick_mode"], "keys")

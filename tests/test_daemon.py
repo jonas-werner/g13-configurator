@@ -127,6 +127,83 @@ class DaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(deleted["ok"])
         self.assertNotIn(new_id, {profile.id for profile in self.daemon.profiles})
 
+    async def test_held_shortcut_joystick_reports(self) -> None:
+        self.daemon.profiles[0] = replace(self.daemon.profiles[0], shortcuts={
+            "STICK_LEFT": [ecodes.KEY_SPACE, ecodes.KEY_A],
+            "STICK_RIGHT": [ecodes.KEY_SPACE, ecodes.KEY_D],
+        })
+        snapshots = []
+        reports = iter([
+            bytes([1, 0, 128, 0, 0, 0, 0, 0]),
+            bytes([1, 0, 128, 0, 0, 0, 0, 0]),
+            bytes([1, 128, 128, 0, 0, 0, 0, 0]),
+            bytes([1, 255, 128, 0, 0, 0, 0, 0]),
+            bytes([1, 128, 128, 0, 0, 0, 0, 0]),
+        ])
+        def read(timeout):
+            snapshots.append(list(self.ui.events))
+            try:
+                return next(reports)
+            except StopIteration:
+                raise EOFError
+        with patch.object(self.g13, "read_report", create=True, side_effect=read):
+            with self.assertRaises(EOFError):
+                await self.daemon.input_loop()
+        down = [(ecodes.EV_KEY, ecodes.KEY_SPACE, 1), (ecodes.EV_KEY, ecodes.KEY_A, 1)]
+        self.assertEqual(snapshots[1], down)
+        self.assertEqual(snapshots[2], down)  # Still held, no premature release.
+        self.assertEqual(self.ui.events, down + [
+            (ecodes.EV_KEY, ecodes.KEY_A, 0), (ecodes.EV_KEY, ecodes.KEY_SPACE, 0),
+            (ecodes.EV_KEY, ecodes.KEY_SPACE, 1), (ecodes.EV_KEY, ecodes.KEY_D, 1),
+            (ecodes.EV_KEY, ecodes.KEY_D, 0), (ecodes.EV_KEY, ecodes.KEY_SPACE, 0),
+        ])
+        self.assertFalse(self.daemon._output_counts)
+
+    async def test_delayed_shortcut_orders_presses_and_cancels_pending_keys(self) -> None:
+        self.daemon.profiles[0] = replace(self.daemon.profiles[0],
+            shortcuts={"G19": [ecodes.KEY_LEFTCTRL, ecodes.KEY_SPACE, ecodes.KEY_S]},
+            shortcut_delay_ms={"G19": 40})
+        self.daemon._press_control("G19")
+        self.assertEqual(self.ui.events, [(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1)])
+        await asyncio.sleep(.055)
+        self.assertEqual(self.ui.events, [
+            (ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1), (ecodes.EV_KEY, ecodes.KEY_SPACE, 1)])
+        await asyncio.sleep(.055)
+        self.assertEqual(self.ui.events[-1], (ecodes.EV_KEY, ecodes.KEY_S, 1))
+        self.daemon._release_control("G19")
+        self.assertEqual(self.ui.events[-3:], [
+            (ecodes.EV_KEY, ecodes.KEY_S, 0), (ecodes.EV_KEY, ecodes.KEY_SPACE, 0),
+            (ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)])
+        self.ui.events.clear()
+        self.daemon._press_control("G19")
+        self.daemon._release_control("G19")
+        await asyncio.sleep(.1)
+        self.assertEqual(self.ui.events, [
+            (ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1), (ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)])
+        self.daemon._press_control("G19")
+        await self.daemon.switch_profile_by_slot(3)
+        count = len(self.ui.events)
+        await asyncio.sleep(.1)
+        self.assertEqual(len(self.ui.events), count)
+        self.assertFalse(self.daemon._output_counts)
+        self.assertFalse(self.daemon._control_timers)
+
+    async def test_held_shortcut_shared_keys_and_profile_switch(self) -> None:
+        self.daemon.profiles[0] = replace(self.daemon.profiles[0],
+            bindings={"G19": ecodes.KEY_SPACE},
+            shortcuts={"STICK_LEFT": [ecodes.KEY_SPACE, ecodes.KEY_A]})
+        self.daemon._press_control("STICK_LEFT")
+        self.daemon._press_control("G19")
+        self.daemon._release_control("STICK_LEFT")
+        self.assertNotIn((ecodes.EV_KEY, ecodes.KEY_SPACE, 0), self.ui.events)
+        self.daemon._release_control("G19")
+        self.assertEqual(self.ui.events[-1], (ecodes.EV_KEY, ecodes.KEY_SPACE, 0))
+        self.daemon._press_control("STICK_LEFT")
+        await self.daemon.switch_profile_by_slot(2)
+        self.assertEqual(self.ui.events[-2:], [
+            (ecodes.EV_KEY, ecodes.KEY_A, 0), (ecodes.EV_KEY, ecodes.KEY_SPACE, 0)])
+        self.assertFalse(self.daemon._output_counts)
+
     async def test_all_m_slots_can_be_empty(self) -> None:
         for profile in list(self.daemon.profiles):
             await self.daemon._handle_request(
@@ -196,6 +273,8 @@ class DaemonTests(unittest.IsolatedAsyncioTestCase):
         async def fail():
             await asyncio.sleep(0)
             raise usb.core.USBError("unplugged", errno=errno.ENODEV)
+        self.daemon.profiles[0] = replace(self.daemon.profiles[0], bindings={"G4": ecodes.KEY_W})
+        self.daemon._press_control("G4")
         self.daemon.held = frozenset({"G4"})
         subscriber = Mock()
         self.daemon._subscribers.add(subscriber)

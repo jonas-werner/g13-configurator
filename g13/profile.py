@@ -88,6 +88,8 @@ class Profile:
     lcd_gif: Path | None = None
     macros: dict[str, list[MacroEvent]] = field(default_factory=dict)
     stick_mode: str = "keys"
+    shortcuts: dict[str, list[int]] = field(default_factory=dict)
+    shortcut_delay_ms: dict[str, int] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -219,6 +221,31 @@ def _resolve_bindings(data: dict[str, Any]) -> dict[str, int]:
     return bindings
 
 
+def _resolve_shortcut_delays(data: Any) -> dict[str, int]:
+    if not isinstance(data, dict):
+        raise ProfileError("shortcut_delay_ms must be a table")
+    for control, delay in data.items():
+        _validate_g_key(control)
+        if isinstance(delay, bool) or not isinstance(delay, int) or not 0 <= delay <= 1000:
+            raise ProfileError("shortcut delay must be an integer from 0 to 1000 ms")
+    return dict(data)
+
+
+def _resolve_shortcuts(data: Any) -> dict[str, list[int]]:
+    if not isinstance(data, dict):
+        raise ProfileError("shortcuts must be a table")
+    result = {}
+    for control, keys in data.items():
+        _validate_g_key(control)
+        if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
+            raise ProfileError(f"shortcut for {control} must be a nonempty list of key names")
+        codes = [resolve_keycode(key) for key in keys]
+        if len(set(codes)) != len(codes):
+            raise ProfileError(f"shortcut for {control} repeats a key")
+        result[control] = codes
+    return result
+
+
 def _resolve_macros(data: dict) -> dict[str, list[MacroEvent]]:
     macros: dict[str, list[MacroEvent]] = {}
     raw_macros = data.get("macros", {})
@@ -272,6 +299,8 @@ def load_profile(path: Path, default_slot: int | None = None) -> Profile:
         lcd_image=_resolve_lcd_media(data, "lcd_image", path, animated=False),
         lcd_gif=_resolve_lcd_media(data, "lcd_gif", path, animated=True),
         macros=_resolve_macros(data),
+        shortcuts=_resolve_shortcuts(data.get("shortcuts", {})),
+        shortcut_delay_ms=_resolve_shortcut_delays(data.get("shortcut_delay_ms", {})),
         stick_mode=_resolve_stick_mode(data.get("stick_mode", "keys")),
     )
 
@@ -312,6 +341,9 @@ def profile_to_dict(profile: Profile) -> dict[str, Any]:
             key: keycode_to_str(code)
             for key, code in sorted(profile.bindings.items(), key=control_sort)
         },
+        "shortcut_delay_ms": dict(profile.shortcut_delay_ms),
+        "shortcuts": {key: [keycode_to_str(code) for code in codes]
+                      for key, codes in sorted(profile.shortcuts.items(), key=control_sort)},
         "macros": {
             key: [
                 {
@@ -339,6 +371,7 @@ def profile_from_payload(profile: Profile, payload: dict[str, Any]) -> Profile:
     color_data = {"color": payload.get("color", list(profile.color))}
     bindings = _resolve_bindings(payload.get("bindings", profile_to_dict(profile)["bindings"]))
     macros = _resolve_macros({"macros": payload.get("macros", profile_to_dict(profile)["macros"])})
+    shortcuts = _resolve_shortcuts(payload.get("shortcuts", profile_to_dict(profile)["shortcuts"]))
     media_data = {
         "lcd_image": payload.get(
             "lcd_image", str(profile.lcd_image) if profile.lcd_image is not None else None
@@ -347,7 +380,9 @@ def profile_from_payload(profile: Profile, payload: dict[str, Any]) -> Profile:
             "lcd_gif", str(profile.lcd_gif) if profile.lcd_gif is not None else None
         ),
     }
-    overlap = set(bindings) & set(macros)
+    # Timed macros take precedence, then held shortcuts, then direct keys.
+    shortcuts = {key: codes for key, codes in shortcuts.items() if key not in macros}
+    overlap = set(bindings) & (set(macros) | set(shortcuts))
     if overlap:
         # A macro takes precedence at runtime, so remove shadowed direct bindings.
         bindings = {key: value for key, value in bindings.items() if key not in overlap}
@@ -364,6 +399,8 @@ def profile_from_payload(profile: Profile, payload: dict[str, Any]) -> Profile:
         lcd_image=_resolve_lcd_media(media_data, "lcd_image", profile.path, animated=False),
         lcd_gif=_resolve_lcd_media(media_data, "lcd_gif", profile.path, animated=True),
         macros=macros,
+        shortcuts=shortcuts,
+        shortcut_delay_ms=_resolve_shortcut_delays(payload.get("shortcut_delay_ms", profile.shortcut_delay_ms)),
         stick_mode=_resolve_stick_mode(payload.get("stick_mode", profile.stick_mode)),
     )
 
@@ -380,6 +417,10 @@ def _profile_toml(profile: Profile) -> dict[str, Any]:
                 data[field] = str(media_path.relative_to(profile.path.parent))
             except ValueError:
                 data[field] = str(media_path)
+    if not profile.shortcut_delay_ms:
+        data.pop("shortcut_delay_ms")
+    if not profile.shortcuts:
+        data.pop("shortcuts")
     if not profile.macros:
         data.pop("macros")
     return data
@@ -422,6 +463,8 @@ def save_macro(path: Path, g13_key: str, events: list[MacroEvent]) -> None:
             lcd_image=profile.lcd_image,
             lcd_gif=profile.lcd_gif,
             macros={**profile.macros, g13_key: events},
+            shortcuts={key: codes for key, codes in profile.shortcuts.items() if key != g13_key},
+            shortcut_delay_ms={key: delay for key, delay in profile.shortcut_delay_ms.items() if key != g13_key},
             stick_mode=profile.stick_mode,
         )
     )
@@ -494,7 +537,7 @@ def ensure_default_profiles(directory: Path = PROFILES_DIR) -> None:
         bindings = data.setdefault("bindings", {})
         macros = data.get("macros", {})
         for control, code in DEFAULT_JOYSTICK_BINDINGS.items():
-            if control not in bindings and control not in macros:
+            if control not in bindings and control not in macros and control not in data.get("shortcuts", {}):
                 bindings[control] = code
                 changed = True
         if "stick_mode" not in data:

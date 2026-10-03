@@ -6,6 +6,17 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r /etc/os-release ]; then
+    # SteamOS must be identified explicitly; ordinary Arch uses the existing path.
+    OS_ID="$(. /etc/os-release; printf '%s' "${ID:-}")"
+    if [ "$OS_ID" = steamos ]; then
+        exec python3 "$REPO_DIR/tools/install/steamos.py" "$@"
+    fi
+fi
+if [ "$#" -ne 0 ]; then
+    echo "Usage: ./install.sh (SteamOS also supports --check, --diagnose, --uninstall)"
+    exit 1
+fi
 VENV_BIN="$REPO_DIR/.venv/bin"
 
 if [ ! -x "$VENV_BIN/g13d" ]; then
